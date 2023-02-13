@@ -43,7 +43,6 @@
 #define COLOR_RED	"\x1B[0;91m"
 #define COLOR_GREEN	"\x1B[0;92m"
 #define COLOR_YELLOW	"\x1B[0;93m"
-#define COLOR_BLUE	"\x1B[0;94m"
 #define COLOR_MAGENTA	"\x1B[0;95m"
 #define COLOR_BOLDGRAY	"\x1B[1;30m"
 #define COLOR_BOLDWHITE	"\x1B[1;37m"
@@ -72,7 +71,7 @@
 // just some random thing for now...
 static const uint8_t led_icon[NUIMO_LED_MATRIX_BYTES] = {0x00, 0xd8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x0a };
 
-static bool verbose = true;
+static bool verbose = false;
 
 struct client {
     int fd;
@@ -90,13 +89,11 @@ struct chars_name_handle {
 
 void print_device_info(struct bt_gatt_client *gatt);
 void print_battery_level(struct bt_gatt_client *gatt);
-static void register_notify_cb(uint16_t att_ecode, void *user_data);
 
-static void print_prompt(void)
-{
-    printf(COLOR_BLUE "[GATT client]" COLOR_OFF "# ");
-    fflush(stdout);
-}
+static void register_notify_cb(uint16_t att_ecode, void *user_data);
+static void ready_cb(bool success, uint8_t att_ecode, void *user_data);
+static void service_changed_cb(uint16_t start_handle, uint16_t end_handle,
+                               void *user_data);
 
 static const char *ecode_to_string(uint8_t ecode)
 {
@@ -166,10 +163,6 @@ static void gatt_debug_cb(const char *str, void *user_data)
 
     PRLOG(COLOR_GREEN "%s%s\n" COLOR_OFF, prefix, str);
 }
-
-static void ready_cb(bool success, uint8_t att_ecode, void *user_data);
-static void service_changed_cb(uint16_t start_handle, uint16_t end_handle,
-                               void *user_data);
 
 static void log_service_event(struct gatt_db_attribute *attr, const char *str)
 {
@@ -360,28 +353,6 @@ static void print_service(struct gatt_db_attribute *attr, void *user_data)
     printf("\n");
 }
 
-static void print_services(struct client *cli)
-{
-    printf("\n");
-
-    gatt_db_foreach_service(cli->db, NULL, print_service, cli);
-}
-
-static void print_services_by_uuid(struct client *cli, const bt_uuid_t *uuid)
-{
-    printf("\n");
-
-    gatt_db_foreach_service(cli->db, uuid, print_service, cli);
-}
-
-static void print_services_by_handle(struct client *cli, uint16_t handle)
-{
-    printf("\n");
-
-    /* TODO: Filter by handle */
-    gatt_db_foreach_service(cli->db, NULL, print_service, cli);
-}
-
 static void read_value_cb(bool success, uint8_t att_ecode, const uint8_t *value,
                           uint16_t length, void *user_data)
 {
@@ -557,17 +528,6 @@ static void service_changed_cb(uint16_t start_handle, uint16_t end_handle,
 
     gatt_db_foreach_service_in_range(cli->db, NULL, print_service, cli,
                                      start_handle, end_handle);
-    print_prompt();
-}
-
-static void services_usage(void)
-{
-    printf("Usage: services [options]\nOptions:\n"
-           "\t -u, --uuid <uuid>\tService UUID\n"
-           "\t -a, --handle <handle>\tService start handle\n"
-           "\t -h, --help\t\tShow help message\n"
-           "e.g.:\n"
-           "\tservices\n\tservices -u 0x180d\n\tservices -a 0x0009\n");
 }
 
 static bool parse_args(char *str, int expected_argc,  char **argv, int *argc)
@@ -586,57 +546,6 @@ static bool parse_args(char *str, int expected_argc,  char **argv, int *argc)
     }
 
     return true;
-}
-
-static void cmd_services(struct client *cli, char *cmd_str)
-{
-    char *argv[3];
-    int argc = 0;
-
-    if (!bt_gatt_client_is_ready(cli->gatt)) {
-        printf("GATT client not initialized\n");
-        return;
-    }
-
-    if (!parse_args(cmd_str, 2, argv, &argc)) {
-        services_usage();
-        return;
-    }
-
-    if (!argc) {
-        print_services(cli);
-        return;
-    }
-
-    if (argc != 2) {
-        services_usage();
-        return;
-    }
-
-    if (!strcmp(argv[0], "-u") || !strcmp(argv[0], "--uuid")) {
-        bt_uuid_t tmp, uuid;
-
-        if (bt_string_to_uuid(&tmp, argv[1]) < 0) {
-            printf("Invalid UUID: %s\n", argv[1]);
-            return;
-        }
-
-        bt_uuid_to_uuid128(&tmp, &uuid);
-
-        print_services_by_uuid(cli, &uuid);
-    } else if (!strcmp(argv[0], "-a") || !strcmp(argv[0], "--handle")) {
-        uint16_t handle;
-        char *endptr = NULL;
-
-        handle = strtol(argv[1], &endptr, 0);
-        if (!endptr || *endptr != '\0') {
-            printf("Invalid start handle: %s\n", argv[1]);
-            return;
-        }
-
-        print_services_by_handle(cli, handle);
-    } else
-        services_usage();
 }
 
 static void read_multiple_usage(void)
@@ -1361,124 +1270,6 @@ static void cmd_unregister_notify(struct client *cli, char *cmd_str)
     printf("Unregistered notify handler with id: %u\n", id);
 }
 
-static void set_security_usage(void)
-{
-    printf("Usage: set-security <level>\n"
-           "level: 1-3\n"
-           "e.g.:\n"
-           "\tset-security 2\n");
-}
-
-static void cmd_set_security(struct client *cli, char *cmd_str)
-{
-    char *argv[2];
-    int argc = 0;
-    char *endptr = NULL;
-    int level;
-
-    if (!bt_gatt_client_is_ready(cli->gatt)) {
-        printf("GATT client not initialized\n");
-        return;
-    }
-
-    if (!parse_args(cmd_str, 1, argv, &argc)) {
-        printf("Too many arguments\n");
-        set_security_usage();
-        return;
-    }
-
-    if (argc < 1) {
-        set_security_usage();
-        return;
-    }
-
-    level = strtol(argv[0], &endptr, 0);
-    if (!endptr || *endptr != '\0' || level < 1 || level > 3) {
-        printf("Invalid level: %s\n", argv[0]);
-        return;
-    }
-
-    if (!bt_gatt_client_set_security(cli->gatt, level))
-        printf("Could not set sec level\n");
-    else
-        printf("Setting security level %d success\n", level);
-}
-
-static void cmd_get_security(struct client *cli, char *cmd_str)
-{
-    int level;
-
-    if (!bt_gatt_client_is_ready(cli->gatt)) {
-        printf("GATT client not initialized\n");
-        return;
-    }
-
-    level = bt_gatt_client_get_security(cli->gatt);
-    if (level < 0)
-        printf("Could not set sec level\n");
-    else
-        printf("Security level: %u\n", level);
-}
-
-static bool convert_sign_key(char *optarg, uint8_t key[16])
-{
-    int i;
-
-    if (strlen(optarg) != 32) {
-        printf("sign-key length is invalid\n");
-        return false;
-    }
-
-    for (i = 0; i < 16; i++) {
-        if (sscanf(optarg + (i * 2), "%2hhx", &key[i]) != 1)
-            return false;
-    }
-
-    return true;
-}
-
-static void set_sign_key_usage(void)
-{
-    printf("Usage: set-sign-key [options]\nOptions:\n"
-           "\t -c, --sign-key <csrk>\tCSRK\n"
-           "e.g.:\n"
-           "\tset-sign-key -c D8515948451FEA320DC05A2E88308188\n");
-}
-
-static bool local_counter(uint32_t *sign_cnt, void *user_data)
-{
-    static uint32_t cnt = 0;
-
-    *sign_cnt = cnt++;
-
-    return true;
-}
-
-static void cmd_set_sign_key(struct client *cli, char *cmd_str)
-{
-    char *argv[3];
-    int argc = 0;
-    uint8_t key[16];
-
-    memset(key, 0, 16);
-
-    if (!parse_args(cmd_str, 2, argv, &argc)) {
-        set_sign_key_usage();
-        return;
-    }
-
-    if (argc != 2) {
-        set_sign_key_usage();
-        return;
-    }
-
-    if (!strcmp(argv[0], "-c") || !strcmp(argv[0], "--sign-key")) {
-        if (convert_sign_key(argv[1], key))
-            bt_att_set_local_key(cli->att, key, local_counter, cli);
-    } else
-        set_sign_key_usage();
-}
-
 static void cmd_help(struct client *cli, char *cmd_str);
 
 typedef void (*command_func_t)(struct client *cli, char *cmd_str);
@@ -1489,7 +1280,6 @@ static struct {
     char *doc;
 } command[] = {
     { "help", cmd_help, "\tDisplay help message" },
-    { "services", cmd_services, "\tShow discovered services" },
     {   "read-value", cmd_read_value,
         "\tRead a characteristic or descriptor value"
     },
@@ -1515,15 +1305,6 @@ static struct {
     {   "unregister-notify", cmd_unregister_notify,
         "Unregister a not/ind session"
     },
-    {   "set-security", cmd_set_security,
-        "\tSet security level on le connection"
-    },
-    {   "get-security", cmd_get_security,
-        "\tGet security level on le connection"
-    },
-    {   "set-sign-key", cmd_set_sign_key,
-        "\tSet signing key for signed write command"
-    },
     { }
 };
 
@@ -1535,59 +1316,6 @@ static void cmd_help(struct client *cli, char *cmd_str)
     for (i = 0; command[i].cmd; i++)
         printf("\t%-15s\t%s\n", command[i].cmd, command[i].doc);
 }
-
-/* static void prompt_read_cb(int fd, uint32_t events, void *user_data) */
-/* { */
-/* 	ssize_t read; */
-/* 	size_t len = 0; */
-/* 	char *line = NULL; */
-/* 	char *cmd = NULL, *args; */
-/* 	struct client *cli = user_data; */
-/* 	int i; */
-
-/* 	if (events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR)) { */
-/* 		mainloop_quit(); */
-/* 		return; */
-/* 	} */
-
-/* 	read = getline(&line, &len, stdin); */
-/* 	if (read < 0) { */
-/* 		free(line); */
-/* 		return; */
-/* 	} */
-
-/* 	if (read <= 1) { */
-/* 		cmd_help(cli, NULL); */
-/* 		print_prompt(); */
-/* 		free(line); */
-/* 		return; */
-/* 	} */
-
-/* 	line[read-1] = '\0'; */
-/* 	args = line; */
-
-/* 	while ((cmd = strsep(&args, " \t"))) */
-/* 		if (*cmd != '\0') */
-/* 			break; */
-
-/* 	if (!cmd) */
-/* 		goto failed; */
-
-/* 	for (i = 0; command[i].cmd; i++) { */
-/* 		if (strcmp(command[i].cmd, cmd) == 0) */
-/* 			break; */
-/* 	} */
-
-/* 	if (command[i].cmd) */
-/* 		command[i].func(cli, args); */
-/* 	else */
-/* 		fprintf(stderr, "Unknown command: %s\n", line); */
-
-/* failed: */
-/* 	print_prompt(); */
-
-/* 	free(line); */
-/* } */
 
 static void signal_cb(int signum, void *user_data)
 {
@@ -1614,7 +1342,7 @@ static int l2cap_le_att_connect(bdaddr_t *src, bdaddr_t *dst, uint8_t dst_type,
         ba2str(src, srcaddr_str);
         ba2str(dst, dstaddr_str);
 
-        printf("btgatt-client: Opening L2CAP LE connection on ATT "
+        printf("nuimo-client: Opening L2CAP LE connection on ATT "
                "channel:\n\t src: %s\n\tdest: %s\n",
                srcaddr_str, dstaddr_str);
     }
@@ -1671,27 +1399,18 @@ static int l2cap_le_att_connect(bdaddr_t *src, bdaddr_t *dst, uint8_t dst_type,
 
 static void usage(void)
 {
-    printf("btgatt-client\n");
-    printf("Usage:\n\tbtgatt-client [options]\n");
+    printf("nuimo-client\n");
+    printf("Usage:\n\tnuimo-client [options]\n");
 
     printf("Options:\n"
            "\t-i, --index <id>\t\tSpecify adapter index, e.g. hci0\n"
-           "\t-d, --dest <addr>\t\tSpecify the destination address\n"
-           "\t-t, --type [random|public] \tSpecify the LE address type\n"
-           "\t-m, --mtu <mtu> \t\tThe ATT MTU to use\n"
-           "\t-s, --security-level <sec> \tSet security level (low|medium|"
-           "high|fips)\n"
            "\t-v, --verbose\t\t\tEnable extra logging\n"
            "\t-h, --help\t\t\tDisplay help\n");
 }
 
 static struct option main_options[] = {
     { "index",		1, 0, 'i' },
-    { "dest",		1, 0, 'd' },
-    { "type",		1, 0, 't' },
-    { "mtu",		1, 0, 'm' },
-    { "security-level",	1, 0, 's' },
-    { "verbose",		0, 0, 'v' },
+    { "verbose",	0, 0, 'v' },
     { "help",		0, 0, 'h' },
     { }
 };
@@ -1868,7 +1587,7 @@ int main(int argc, char *argv[])
     struct client *cli;
     char addr[18];
 
-    while ((opt = getopt_long(argc, argv, "+hvs:m:t:d:i:",
+    while ((opt = getopt_long(argc, argv, "+hv:i:",
                               main_options, NULL)) != -1) {
         switch (opt) {
         case 'h':
@@ -1877,49 +1596,6 @@ int main(int argc, char *argv[])
         case 'v':
             verbose = true;
             break;
-        case 's':
-            if (strcmp(optarg, "low") == 0)
-                sec = BT_SECURITY_LOW;
-            else if (strcmp(optarg, "medium") == 0)
-                sec = BT_SECURITY_MEDIUM;
-            else if (strcmp(optarg, "high") == 0)
-                sec = BT_SECURITY_HIGH;
-            else if (strcmp(optarg, "fips") == 0)
-                sec = BT_SECURITY_FIPS;
-            else {
-                fprintf(stderr, "Invalid security level\n");
-                return EXIT_FAILURE;
-            }
-            break;
-        case 'm': {
-            int arg;
-
-            arg = atoi(optarg);
-            if (arg <= 0) {
-                fprintf(stderr, "Invalid MTU: %d\n", arg);
-                return EXIT_FAILURE;
-            }
-
-            if (arg > UINT16_MAX) {
-                fprintf(stderr, "MTU too large: %d\n", arg);
-                return EXIT_FAILURE;
-            }
-
-            mtu = (uint16_t)arg;
-            break;
-        }
-        case 't':
-            if (strcmp(optarg, "random") == 0)
-                dst_type = BDADDR_LE_RANDOM;
-            else if (strcmp(optarg, "public") == 0)
-                dst_type = BDADDR_LE_PUBLIC;
-            else {
-                fprintf(stderr,
-                        "Allowed types: random, public\n");
-                return EXIT_FAILURE;
-            }
-            break;
-
         case 'i':
             dev_id = hci_devid(optarg);
             if (dev_id < 0) {
