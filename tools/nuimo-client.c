@@ -53,11 +53,12 @@ static struct timeval tv;
 #define COLOR_BOLDGRAY	"\x1B[1;30m"
 #define COLOR_BOLDWHITE	"\x1B[1;37m"
 
-#define NUIMO_CHAR_LED_HANDLE     0x0030
-#define NUIMO_CHAR_TOUCH_HANDLE   0x0023
-#define NUIMO_CHAR_BUTTON_HANDLE  0x001d
-#define NUIMO_CHAR_GESTURE_HANDLE 0x0020
-#define NUIMO_CHAR_ENCODER_HANDLE 0x0026
+#define NUIMO_CHAR_LED_HANDLE       0x0030
+#define NUIMO_CHAR_TOUCH_HANDLE     0x0023
+#define NUIMO_CHAR_BUTTON_HANDLE    0x001d
+#define NUIMO_CHAR_GESTURE_HANDLE   0x0020
+#define NUIMO_CHAR_ENCODER_HANDLE   0x0026
+#define NUIMO_CHAR_HEARTBEAT_HANDLE 0x002b
 
 #define NUIMO_CHAR_TOUCH_SWIPE_LEFT       0
 #define NUIMO_CHAR_TOUCH_SWIPE_RIGHT      1
@@ -73,6 +74,8 @@ static struct timeval tv;
 #define NUIMO_CHAR_TOUCH_LONGTOUCH_BOTTOM 11
 
 #define NUIMO_LED_MATRIX_BYTES 13
+
+#define HEARTBEAT_INTERVAL_SEC 30
 
 // just some random thing for now...
 static const uint8_t led_icon[NUIMO_LED_MATRIX_BYTES] = {0x00, 0xd8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x0a };
@@ -100,6 +103,7 @@ static void register_notify_cb(uint16_t att_ecode, void *user_data);
 static void ready_cb(bool success, uint8_t att_ecode, void *user_data);
 static void service_changed_cb(uint16_t start_handle, uint16_t end_handle,
                                void *user_data);
+static void write_cb(bool success, uint8_t att_ecode, void *user_data);
 
 static const char *ecode_to_string(uint8_t ecode)
 {
@@ -426,7 +430,8 @@ static void write_led(struct bt_gatt_client *gatt, const uint8_t bytes[NUIMO_LED
 struct chars_name_handle battery_char = {.handle = 0x000b, .name = "Battery level"};
 
 void print_battery_level(struct bt_gatt_client *gatt) {
-    if (!bt_gatt_client_read_value(gatt, battery_char.handle, read_battery_level_cb, &battery_char, NULL))
+    if (!bt_gatt_client_read_value(gatt, battery_char.handle, read_battery_level_cb, &battery_char,
+                                   NULL))
         printf("Failed to initiate read value procedure\n");
 }
 
@@ -464,6 +469,15 @@ static void encoder_cb(uint16_t value_handle, const uint8_t *value,
     }
 }
 
+static void heartbeat_cb(uint16_t value_handle, const uint8_t *value,
+                         uint16_t length, void *user_data)
+{
+    if (length == 1) {
+        LOG("HEARTBEAT %d\n", *value);
+    }
+}
+
+
 static void gesture_cb(uint16_t value_handle, const uint8_t *value,
                        uint16_t length, void *user_data)
 {
@@ -477,6 +491,7 @@ static void ready_cb(bool success, uint8_t att_ecode, void *user_data)
 {
     unsigned int id;
     struct client *cli = user_data;
+    uint8_t heartbeat_interval_sec = HEARTBEAT_INTERVAL_SEC;
 
     if (!success) {
         PRLOG("GATT discovery procedures failed - error code: 0x%02x\n",
@@ -520,6 +535,19 @@ static void ready_cb(bool success, uint8_t att_ecode, void *user_data)
                                         gesture_cb, cli->gatt, NULL);
     if (!id) {
         printf("Failed to register gesture handler\n");
+        return;
+    }
+
+    // heartbeat, configure to receive every 30 seconds
+    if (!bt_gatt_client_write_value(cli->gatt, NUIMO_CHAR_HEARTBEAT_HANDLE,
+                                    &heartbeat_interval_sec, 1, write_cb,
+                                    NULL, NULL))
+        printf("Failed to initiate write procedure\n");
+
+    id = bt_gatt_client_register_notify(cli->gatt, NUIMO_CHAR_HEARTBEAT_HANDLE,
+                                        register_notify_cb, heartbeat_cb, cli->gatt, NULL);
+    if (!id) {
+        printf("Failed to register heartbeat handler\n");
         return;
     }
 }
@@ -738,9 +766,7 @@ static struct option write_value_options[] = {
 
 static void write_cb(bool success, uint8_t att_ecode, void *user_data)
 {
-    if (success) {
-        PRLOG("\nWrite successful\n");
-    } else {
+    if (!success) {
         PRLOG("\nWrite failed: %s (0x%02x)\n",
               ecode_to_string(att_ecode), att_ecode);
     }
