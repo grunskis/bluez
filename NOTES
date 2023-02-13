@@ -1,0 +1,7 @@
+Build on void linux
+===================
+
+# TODO xbps-install necessary deps
+
+$ ./bootstrap-configure --with-udevdir=/usr/lib/udev --disable-systemd --enable-library --enable-deprecated --disable-mesh --disable-midi --disable-hid --disable-avrcp --disable-hog --disable-network --disable-btpclient --disable-cups --disable-client --enable-maintainer-mode
+$ make -j4 tools/nuimo-client

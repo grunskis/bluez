@@ -97,6 +97,7 @@ tools/obexctl
 tools/gatt-service
 tools/btgatt-client
 tools/btgatt-server
+tools/nuimo-client
 tools/create-image
 tools/test-runner
 tools/check-selftest
