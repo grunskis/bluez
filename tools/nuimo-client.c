@@ -20,6 +20,7 @@
 #include <getopt.h>
 #include <limits.h>
 #include <errno.h>
+#include <sys/time.h>
 
 #include "lib/bluetooth.h"
 #include "lib/hci.h"
@@ -35,6 +36,11 @@
 #include "src/shared/gatt-client.h"
 
 #define ATT_CID 4
+
+static struct timeval tv;
+
+#define LOG(...) \
+  gettimeofday(&tv, NULL); printf("%ld.%ld ", tv.tv_sec, tv.tv_usec); printf(__VA_ARGS__);
 
 #define PRLOG(...) \
 	printf(__VA_ARGS__);
@@ -428,7 +434,7 @@ static void button_press_cb(uint16_t value_handle, const uint8_t *value,
                             uint16_t length, void *user_data)
 {
     if (length == 1) {
-        printf("BUTTON %d\n", *value);
+        LOG("BUTTON %d\n", *value);
     }
 }
 
@@ -438,7 +444,7 @@ static void touch_cb(uint16_t value_handle, const uint8_t *value,
     struct bt_gatt_client *gatt = user_data;
 
     if (length == 1) {
-        printf("TOUCH %d\n", *value);
+        LOG("TOUCH %d\n", *value);
         write_led(gatt, led_icon);
     }
 }
@@ -454,7 +460,7 @@ static void encoder_cb(uint16_t value_handle, const uint8_t *value,
         if ((value[1] >> 7) > 0)
             rotation = rotation - (1 << 16);
 
-        printf("ENCODER %d\n", rotation);
+        LOG("ENCODER %d\n", rotation);
     }
 }
 
