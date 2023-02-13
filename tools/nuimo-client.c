@@ -48,7 +48,31 @@
 #define COLOR_BOLDGRAY	"\x1B[1;30m"
 #define COLOR_BOLDWHITE	"\x1B[1;37m"
 
-static bool verbose = false;
+#define NUIMO_CHAR_LED_HANDLE     0x0030
+#define NUIMO_CHAR_TOUCH_HANDLE   0x0023
+#define NUIMO_CHAR_BUTTON_HANDLE  0x001d
+#define NUIMO_CHAR_GESTURE_HANDLE 0x0020
+#define NUIMO_CHAR_ENCODER_HANDLE 0x0026
+
+#define NUIMO_CHAR_TOUCH_SWIPE_LEFT       0
+#define NUIMO_CHAR_TOUCH_SWIPE_RIGHT      1
+#define NUIMO_CHAR_TOUCH_SWIPE_UP         2
+#define NUIMO_CHAR_TOUCH_SWIPE_DOWN       3
+#define NUIMO_CHAR_TOUCH_TOUCH_LEFT       4
+#define NUIMO_CHAR_TOUCH_TOUCH_RIGHT      5
+#define NUIMO_CHAR_TOUCH_TOUCH_TOP        6
+#define NUIMO_CHAR_TOUCH_TOUCH_BOTTOM     7
+#define NUIMO_CHAR_TOUCH_LONGTOUCH_LEFT   8
+#define NUIMO_CHAR_TOUCH_LONGTOUCH_RIGHT  9
+#define NUIMO_CHAR_TOUCH_LONGTOUCH_TOP    10
+#define NUIMO_CHAR_TOUCH_LONGTOUCH_BOTTOM 11
+
+#define NUIMO_LED_MATRIX_BYTES 13
+
+// just some random thing for now...
+static const uint8_t led_icon[NUIMO_LED_MATRIX_BYTES] = {0x00, 0xd8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x0a };
+
+static bool verbose = true;
 
 struct client {
     int fd;
@@ -66,6 +90,7 @@ struct chars_name_handle {
 
 void print_device_info(struct bt_gatt_client *gatt);
 void print_battery_level(struct bt_gatt_client *gatt);
+static void register_notify_cb(uint16_t att_ecode, void *user_data);
 
 static void print_prompt(void)
 {
@@ -412,6 +437,15 @@ void print_device_info(struct bt_gatt_client *gatt) {
     }
 }
 
+static void write_led(struct bt_gatt_client *gatt, const uint8_t bytes[NUIMO_LED_MATRIX_BYTES]) {
+    if (!bt_gatt_client_write_without_response(gatt,
+            NUIMO_CHAR_LED_HANDLE,
+            false,
+            bytes,
+            NUIMO_LED_MATRIX_BYTES))
+        printf("Failed to initiate write without response procedure\n");
+}
+
 struct chars_name_handle battery_char = {.handle = 0x000b, .name = "Battery level"};
 
 void print_battery_level(struct bt_gatt_client *gatt) {
@@ -419,21 +453,45 @@ void print_battery_level(struct bt_gatt_client *gatt) {
         printf("Failed to initiate read value procedure\n");
 }
 
-static void register_notify_cb(uint16_t att_ecode, void *user_data);
 static void button_press_cb(uint16_t value_handle, const uint8_t *value,
                             uint16_t length, void *user_data)
 {
     if (length == 1) {
-        const char *action = (*value == 1 ? "BUTTON_PRESSED" : "BUTTON_RELEASED");
-        printf("%s\n", action);
+        printf("BUTTON %d\n", *value);
     }
 }
 
 static void touch_cb(uint16_t value_handle, const uint8_t *value,
                      uint16_t length, void *user_data)
 {
+    struct bt_gatt_client *gatt = user_data;
+
     if (length == 1) {
-        printf("TOUCH_%d\n", *value);
+        printf("TOUCH %d\n", *value);
+        write_led(gatt, led_icon);
+    }
+}
+
+static void encoder_cb(uint16_t value_handle, const uint8_t *value,
+                       uint16_t length, void *user_data)
+{
+    int16_t rotation;
+
+    if (length == 2) {
+        // TODO verify that this bit logic is correct
+        rotation = value[0] + (value[1] << 8);
+        if ((value[1] >> 7) > 0)
+            rotation = rotation - (1 << 16);
+
+        printf("ENCODER %d\n", rotation);
+    }
+}
+
+static void gesture_cb(uint16_t value_handle, const uint8_t *value,
+                       uint16_t length, void *user_data)
+{
+    if (length == 2) {
+        printf("GESTURE %d %d\n", value[0], value[1]);
     }
 }
 
@@ -449,66 +507,44 @@ static void ready_cb(bool success, uint8_t att_ecode, void *user_data)
         return;
     }
 
-    /* PRLOG("GATT discovery procedures complete\n"); */
+    print_device_info(cli->gatt);
+    print_battery_level(cli->gatt);
 
-    /* print_services(cli); */
-    /* print_prompt(); */
-
-
-
-    // button press
-    id = bt_gatt_client_register_notify(cli->gatt, (uint16_t)0x001d,
+    // button
+    id = bt_gatt_client_register_notify(cli->gatt, NUIMO_CHAR_BUTTON_HANDLE,
                                         register_notify_cb,
-                                        button_press_cb, NULL, NULL);
+                                        button_press_cb, cli->gatt, NULL);
     if (!id) {
         printf("Failed to register button press handler\n");
         return;
     }
 
-    //printf("Registering notify handler with id: %u\n", id);
-
-    /*
-                    - Gesture Characteristic
-                            - UUID : 0x1526
-                            - Read / Notify
-                            - Notifies detected fly gestures and proximity gestures
-                            - 2 bytes unsigned integer
-                            - 1st byte : 0 = Fly Left, 1 = Fly Right, 4 = Proximity distance (if this, proximity distance should be calc$                        - 2nd byte : 0 to 255=Proximity distance
-
-                    - Touch Characteristic
-                            - UUID : 0x1527
-                            - Read / Notify
-                            - Notifies detected swipe, touch and long touch events
-                            - 1 byte unsigned integer :  0 = Swipe Left, 1 = Swipe Right, 2 = Swipe Up, 3 = Swipe Down, 4 = Touch Left, $
-
-                    - Encoder Characteristic
-                            - UUID : 0x1528
-                            - Read / Notify
-                            - Notifies direction and relative rotational distance from last position of encoder
-                            - 2 bytes signed integer : >0 = Clockwise Rotation, <0 = Counter Clockwise Rotation
-
-                    - Button Characteristic
-                            - UUID : 0x1529
-                            - Read / Notify
-                            - Notifies press and release events of button
-                            - 1 byte unsigned integer : 0 = Release, 1 = Press
-    */
-
-
     // touch
-    id = bt_gatt_client_register_notify(cli->gatt, (uint16_t)0x0023,
+    id = bt_gatt_client_register_notify(cli->gatt, NUIMO_CHAR_TOUCH_HANDLE,
                                         register_notify_cb,
-                                        touch_cb, NULL, NULL);
+                                        touch_cb, cli->gatt, NULL);
     if (!id) {
         printf("Failed to register touch handler\n");
         return;
     }
 
-    //	printf("\nDevice info:\n");
-    print_device_info(cli->gatt);
-    print_battery_level(cli->gatt);
+    // encoder
+    id = bt_gatt_client_register_notify(cli->gatt, NUIMO_CHAR_ENCODER_HANDLE,
+                                        register_notify_cb,
+                                        encoder_cb, cli->gatt, NULL);
+    if (!id) {
+        printf("Failed to register encoder handler\n");
+        return;
+    }
 
-    //	printf("\nWaiting for events...\n");
+    // gesture FIXME couldn't verify that this works
+    id = bt_gatt_client_register_notify(cli->gatt, NUIMO_CHAR_GESTURE_HANDLE,
+                                        register_notify_cb,
+                                        gesture_cb, cli->gatt, NULL);
+    if (!id) {
+        printf("Failed to register gesture handler\n");
+        return;
+    }
 }
 
 static void service_changed_cb(uint16_t start_handle, uint16_t end_handle,
