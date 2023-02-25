@@ -42,9 +42,6 @@ static struct timeval tv;
 #define LOG(...) \
   gettimeofday(&tv, NULL); printf("%ld.%ld ", tv.tv_sec, tv.tv_usec); printf(__VA_ARGS__);
 
-#define PRLOG(...) \
-	printf(__VA_ARGS__);
-
 #define COLOR_OFF	"\x1B[0m"
 #define COLOR_RED	"\x1B[0;91m"
 #define COLOR_GREEN	"\x1B[0;92m"
@@ -103,8 +100,6 @@ static void register_notify_cb(uint16_t att_ecode, void *user_data);
 static void ready_cb(bool success, uint8_t att_ecode, void *user_data);
 static void service_changed_cb(uint16_t start_handle, uint16_t end_handle,
                                void *user_data);
-static void write_cb(bool success, uint8_t att_ecode, void *user_data);
-
 static const char *ecode_to_string(uint8_t ecode)
 {
     switch (ecode) {
@@ -164,14 +159,14 @@ static void att_debug_cb(const char *str, void *user_data)
 {
     const char *prefix = user_data;
 
-    PRLOG(COLOR_BOLDGRAY "%s" COLOR_BOLDWHITE "%s\n" COLOR_OFF, prefix, str);
+    LOG(COLOR_BOLDGRAY "%s" COLOR_BOLDWHITE "%s\n" COLOR_OFF, prefix, str);
 }
 
 static void gatt_debug_cb(const char *str, void *user_data)
 {
     const char *prefix = user_data;
 
-    PRLOG(COLOR_GREEN "%s%s\n" COLOR_OFF, prefix, str);
+    LOG(COLOR_GREEN "%s%s\n" COLOR_OFF, prefix, str);
 }
 
 static void log_service_event(struct gatt_db_attribute *attr, const char *str)
@@ -185,13 +180,13 @@ static void log_service_event(struct gatt_db_attribute *attr, const char *str)
 
     gatt_db_attribute_get_service_handles(attr, &start, &end);
 
-    PRLOG("%s - UUID: %s start: 0x%04x end: 0x%04x\n", str, uuid_str,
-          start, end);
+    LOG("%s - UUID: %s start: 0x%04x end: 0x%04x\n", str, uuid_str,
+        start, end);
 }
 
 static void service_added_cb(struct gatt_db_attribute *attr, void *user_data)
 {
-    /* log_service_event(attr, "Service Added"); */
+    log_service_event(attr, "Service Added");
 }
 
 static void service_removed_cb(struct gatt_db_attribute *attr, void *user_data)
@@ -370,8 +365,8 @@ static void read_value_cb(bool success, uint8_t att_ecode, const uint8_t *value,
     struct chars_name_handle *ch = user_data;
 
     if (!success) {
-        PRLOG("\nRead request failed: %s (0x%02x)\n",
-              ecode_to_string(att_ecode), att_ecode);
+        LOG("\nRead request failed: %s (0x%02x)\n",
+            ecode_to_string(att_ecode), att_ecode);
         return;
     }
 
@@ -393,7 +388,7 @@ static void read_battery_level_cb(bool success, uint8_t att_ecode, const uint8_t
     struct chars_name_handle *ch = user_data;
 
     if (!success) {
-        PRLOG("\nRead request failed: %s (0x%02x)\n", ecode_to_string(att_ecode), att_ecode);
+        LOG("\nRead request failed: %s (0x%02x)\n", ecode_to_string(att_ecode), att_ecode);
         return;
     }
 
@@ -434,6 +429,15 @@ void print_battery_level(struct bt_gatt_client *gatt) {
                                    NULL))
         printf("Failed to initiate read value procedure\n");
 }
+
+static void write_cb(bool success, uint8_t att_ecode, void *user_data)
+{
+    if (!success) {
+        LOG("\nWrite failed: %s (0x%02x)\n",
+            ecode_to_string(att_ecode), att_ecode);
+    }
+}
+
 
 static void button_press_cb(uint16_t value_handle, const uint8_t *value,
                             uint16_t length, void *user_data)
@@ -494,8 +498,8 @@ static void ready_cb(bool success, uint8_t att_ecode, void *user_data)
     uint8_t heartbeat_interval_sec = HEARTBEAT_INTERVAL_SEC;
 
     if (!success) {
-        PRLOG("GATT discovery procedures failed - error code: 0x%02x\n",
-              att_ecode);
+        LOG("GATT discovery procedures failed - error code: 0x%02x\n",
+            att_ecode);
         return;
     }
 
@@ -564,790 +568,16 @@ static void service_changed_cb(uint16_t start_handle, uint16_t end_handle,
                                      start_handle, end_handle);
 }
 
-static bool parse_args(char *str, int expected_argc,  char **argv, int *argc)
-{
-    char **ap;
-
-    for (ap = argv; (*ap = strsep(&str, " \t")) != NULL;) {
-        if (**ap == '\0')
-            continue;
-
-        (*argc)++;
-        ap++;
-
-        if (*argc > expected_argc)
-            return false;
-    }
-
-    return true;
-}
-
-static void read_multiple_usage(void)
-{
-    printf("Usage: read-multiple <handle_1> <handle_2> ...\n");
-}
-
-static void read_multiple_cb(bool success, uint8_t att_ecode,
-                             const uint8_t *value, uint16_t length,
-                             void *user_data)
-{
-    int i;
-
-    if (!success) {
-        PRLOG("\nRead multiple request failed: 0x%02x\n", att_ecode);
-        return;
-    }
-
-    printf("\nRead multiple value (%u bytes):", length);
-
-    for (i = 0; i < length; i++)
-        printf("%02x ", value[i]);
-
-    PRLOG("\n");
-}
-
-static void cmd_read_multiple(struct client *cli, char *cmd_str)
-{
-    int argc = 0;
-    uint16_t *value;
-    char *argv[512];
-    int i;
-    char *endptr = NULL;
-
-    if (!bt_gatt_client_is_ready(cli->gatt)) {
-        printf("GATT client not initialized\n");
-        return;
-    }
-
-    if (!parse_args(cmd_str, sizeof(argv), argv, &argc) || argc < 2) {
-        read_multiple_usage();
-        return;
-    }
-
-    value = malloc(sizeof(uint16_t) * argc);
-    if (!value) {
-        printf("Failed to construct value\n");
-        return;
-    }
-
-    for (i = 0; i < argc; i++) {
-        value[i] = strtol(argv[i], &endptr, 0);
-        if (endptr == argv[i] || *endptr != '\0' || !value[i]) {
-            printf("Invalid value byte: %s\n", argv[i]);
-            free(value);
-            return;
-        }
-    }
-
-    if (!bt_gatt_client_read_multiple(cli->gatt, value, argc,
-                                      read_multiple_cb, NULL, NULL))
-        printf("Failed to initiate read multiple procedure\n");
-
-    free(value);
-}
-
-static void read_value_usage(void)
-{
-    printf("Usage: read-value <value_handle>\n");
-}
-
-static void read_cb(bool success, uint8_t att_ecode, const uint8_t *value,
-                    uint16_t length, void *user_data)
-{
-    int i;
-
-    if (!success) {
-        PRLOG("\nRead request failed: %s (0x%02x)\n",
-              ecode_to_string(att_ecode), att_ecode);
-        return;
-    }
-
-    printf("\nRead value");
-
-    if (length == 0) {
-        PRLOG(": 0 bytes\n");
-        return;
-    }
-
-    printf(" (%u bytes): ", length);
-
-    for (i = 0; i < length; i++)
-        printf("%02x ", value[i]);
-
-
-    PRLOG("\n");
-}
-
-
-static void cmd_read_value(struct client *cli, char *cmd_str)
-{
-    char *argv[2];
-    int argc = 0;
-    uint16_t handle;
-    char *endptr = NULL;
-
-    if (!bt_gatt_client_is_ready(cli->gatt)) {
-        printf("GATT client not initialized\n");
-        return;
-    }
-
-    if (!parse_args(cmd_str, 1, argv, &argc) || argc != 1) {
-        read_value_usage();
-        return;
-    }
-
-    handle = strtol(argv[0], &endptr, 0);
-    if (!endptr || *endptr != '\0' || !handle) {
-        printf("Invalid value handle: %s\n", argv[0]);
-        return;
-    }
-
-    if (!bt_gatt_client_read_value(cli->gatt, handle, read_cb,
-                                   NULL, NULL))
-        printf("Failed to initiate read value procedure\n");
-}
-
-static void read_long_value_usage(void)
-{
-    printf("Usage: read-long-value <value_handle> <offset>\n");
-}
-
-static void cmd_read_long_value(struct client *cli, char *cmd_str)
-{
-    char *argv[3];
-    int argc = 0;
-    uint16_t handle;
-    uint16_t offset;
-    char *endptr = NULL;
-
-    if (!bt_gatt_client_is_ready(cli->gatt)) {
-        printf("GATT client not initialized\n");
-        return;
-    }
-
-    if (!parse_args(cmd_str, 2, argv, &argc) || argc != 2) {
-        read_long_value_usage();
-        return;
-    }
-
-    handle = strtol(argv[0], &endptr, 0);
-    if (!endptr || *endptr != '\0' || !handle) {
-        printf("Invalid value handle: %s\n", argv[0]);
-        return;
-    }
-
-    endptr = NULL;
-    offset = strtol(argv[1], &endptr, 0);
-    if (!endptr || *endptr != '\0') {
-        printf("Invalid offset: %s\n", argv[1]);
-        return;
-    }
-
-    if (!bt_gatt_client_read_long_value(cli->gatt, handle, offset, read_cb,
-                                        NULL, NULL))
-        printf("Failed to initiate read long value procedure\n");
-}
-
-static void write_value_usage(void)
-{
-    printf("Usage: write-value [options] <value_handle> <value>\n"
-           "Options:\n"
-           "\t-w, --without-response\tWrite without response\n"
-           "\t-s, --signed-write\tSigned write command\n"
-           "e.g.:\n"
-           "\twrite-value 0x0001 00 01 00\n");
-}
-
-static struct option write_value_options[] = {
-    { "without-response",	0, 0, 'w' },
-    { "signed-write",	0, 0, 's' },
-    { }
-};
-
-static void write_cb(bool success, uint8_t att_ecode, void *user_data)
-{
-    if (!success) {
-        PRLOG("\nWrite failed: %s (0x%02x)\n",
-              ecode_to_string(att_ecode), att_ecode);
-    }
-}
-
-static void cmd_write_value(struct client *cli, char *cmd_str)
-{
-    int opt, i, val;
-    char *argvbuf[516];
-    char **argv = argvbuf;
-    int argc = 1;
-    uint16_t handle;
-    char *endptr = NULL;
-    int length;
-    uint8_t *value = NULL;
-    bool without_response = false;
-    bool signed_write = false;
-
-    if (!bt_gatt_client_is_ready(cli->gatt)) {
-        printf("GATT client not initialized\n");
-        return;
-    }
-
-    if (!parse_args(cmd_str, 514, argv + 1, &argc)) {
-        printf("Too many arguments\n");
-        write_value_usage();
-        return;
-    }
-
-    optind = 0;
-    argv[0] = "write-value";
-    while ((opt = getopt_long(argc, argv, "+ws", write_value_options,
-                              NULL)) != -1) {
-        switch (opt) {
-        case 'w':
-            without_response = true;
-            break;
-        case 's':
-            signed_write = true;
-            break;
-        default:
-            write_value_usage();
-            return;
-        }
-    }
-
-    argc -= optind;
-    argv += optind;
-
-    if (argc < 1) {
-        write_value_usage();
-        return;
-    }
-
-    handle = strtol(argv[0], &endptr, 0);
-    if (!endptr || *endptr != '\0' || !handle) {
-        printf("Invalid handle: %s\n", argv[0]);
-        return;
-    }
-
-    length = argc - 1;
-
-    if (length > 0) {
-        if (length > UINT16_MAX) {
-            printf("Write value too long\n");
-            return;
-        }
-
-        value = malloc(length);
-        if (!value) {
-            printf("Failed to construct write value\n");
-            return;
-        }
-
-        for (i = 1; i < argc; i++) {
-            val = strtol(argv[i], &endptr, 0);
-            if (endptr == argv[i] || *endptr != '\0'
-                    || errno == ERANGE || val < 0 || val > 255) {
-                printf("Invalid value byte: %s\n",
-                       argv[i]);
-                goto done;
-            }
-            value[i-1] = val;
-        }
-    }
-
-    if (without_response) {
-        if (!bt_gatt_client_write_without_response(cli->gatt, handle,
-                signed_write, value, length)) {
-            printf("Failed to initiate write without response "
-                   "procedure\n");
-            goto done;
-        }
-
-        printf("Write command sent\n");
-        goto done;
-    }
-
-    if (!bt_gatt_client_write_value(cli->gatt, handle, value, length,
-                                    write_cb,
-                                    NULL, NULL))
-        printf("Failed to initiate write procedure\n");
-
-done:
-    free(value);
-}
-
-static void write_long_value_usage(void)
-{
-    printf("Usage: write-long-value [options] <value_handle> <offset> "
-           "<value>\n"
-           "Options:\n"
-           "\t-r, --reliable-write\tReliable write\n"
-           "e.g.:\n"
-           "\twrite-long-value 0x0001 0 00 01 00\n");
-}
-
-static struct option write_long_value_options[] = {
-    { "reliable-write",	0, 0, 'r' },
-    { }
-};
-
-static void write_long_cb(bool success, bool reliable_error, uint8_t att_ecode,
-                          void *user_data)
-{
-    if (success) {
-        PRLOG("Write successful\n");
-    } else if (reliable_error) {
-        PRLOG("Reliable write not verified\n");
-    } else {
-        PRLOG("\nWrite failed: %s (0x%02x)\n",
-              ecode_to_string(att_ecode), att_ecode);
-    }
-}
-
-static void cmd_write_long_value(struct client *cli, char *cmd_str)
-{
-    int opt, i, val;
-    char *argvbuf[516];
-    char **argv = argvbuf;
-    int argc = 1;
-    uint16_t handle;
-    uint16_t offset;
-    char *endptr = NULL;
-    int length;
-    uint8_t *value = NULL;
-    bool reliable_writes = false;
-
-    if (!bt_gatt_client_is_ready(cli->gatt)) {
-        printf("GATT client not initialized\n");
-        return;
-    }
-
-    if (!parse_args(cmd_str, 514, argv + 1, &argc)) {
-        printf("Too many arguments\n");
-        write_value_usage();
-        return;
-    }
-
-    optind = 0;
-    argv[0] = "write-long-value";
-    while ((opt = getopt_long(argc, argv, "+r", write_long_value_options,
-                              NULL)) != -1) {
-        switch (opt) {
-        case 'r':
-            reliable_writes = true;
-            break;
-        default:
-            write_long_value_usage();
-            return;
-        }
-    }
-
-    argc -= optind;
-    argv += optind;
-
-    if (argc < 2) {
-        write_long_value_usage();
-        return;
-    }
-
-    handle = strtol(argv[0], &endptr, 0);
-    if (!endptr || *endptr != '\0' || !handle) {
-        printf("Invalid handle: %s\n", argv[0]);
-        return;
-    }
-
-    endptr = NULL;
-    offset = strtol(argv[1], &endptr, 0);
-    if (!endptr || *endptr != '\0' || errno == ERANGE) {
-        printf("Invalid offset: %s\n", argv[1]);
-        return;
-    }
-
-    length = argc - 2;
-
-    if (length > 0) {
-        if (length > UINT16_MAX) {
-            printf("Write value too long\n");
-            return;
-        }
-
-        value = malloc(length);
-        if (!value) {
-            printf("Failed to construct write value\n");
-            return;
-        }
-
-        for (i = 2; i < argc; i++) {
-            val = strtol(argv[i], &endptr, 0);
-            if (endptr == argv[i] || *endptr != '\0'
-                    || errno == ERANGE || val < 0 || val > 255) {
-                printf("Invalid value byte: %s\n",
-                       argv[i]);
-                free(value);
-                return;
-            }
-            value[i-2] = val;
-        }
-    }
-
-    if (!bt_gatt_client_write_long_value(cli->gatt, reliable_writes, handle,
-                                         offset, value, length,
-                                         write_long_cb,
-                                         NULL, NULL))
-        printf("Failed to initiate long write procedure\n");
-
-    free(value);
-}
-
-static void write_prepare_usage(void)
-{
-    printf("Usage: write-prepare [options] <value_handle> <offset> "
-           "<value>\n"
-           "Options:\n"
-           "\t-s, --session-id\tSession id\n"
-           "e.g.:\n"
-           "\twrite-prepare -s 1 0x0001 00 01 00\n");
-}
-
-static struct option write_prepare_options[] = {
-    { "session-id",		1, 0, 's' },
-    { }
-};
-
-static void cmd_write_prepare(struct client *cli, char *cmd_str)
-{
-    int opt, i, val;
-    char *argvbuf[516];
-    char **argv = argvbuf;
-    int argc = 0;
-    unsigned int id = 0;
-    uint16_t handle;
-    uint16_t offset;
-    char *endptr = NULL;
-    unsigned int length;
-    uint8_t *value = NULL;
-
-    if (!bt_gatt_client_is_ready(cli->gatt)) {
-        printf("GATT client not initialized\n");
-        return;
-    }
-
-    if (!parse_args(cmd_str, 514, argv + 1, &argc)) {
-        printf("Too many arguments\n");
-        write_value_usage();
-        return;
-    }
-
-    /* Add command name for getopt_long */
-    argc++;
-    argv[0] = "write-prepare";
-
-    optind = 0;
-    while ((opt = getopt_long(argc, argv, "s:", write_prepare_options,
-                              NULL)) != -1) {
-        switch (opt) {
-        case 's':
-            if (!optarg) {
-                write_prepare_usage();
-                return;
-            }
-
-            id = atoi(optarg);
-
-            break;
-        default:
-            write_prepare_usage();
-            return;
-        }
-    }
-
-    argc -= optind;
-    argv += optind;
-
-    if (argc < 3) {
-        write_prepare_usage();
-        return;
-    }
-
-    if (cli->reliable_session_id != id) {
-        printf("Session id != Ongoing session id (%u!=%u)\n", id,
-               cli->reliable_session_id);
-        return;
-    }
-
-    handle = strtol(argv[0], &endptr, 0);
-    if (!endptr || *endptr != '\0' || !handle) {
-        printf("Invalid handle: %s\n", argv[0]);
-        return;
-    }
-
-    endptr = NULL;
-    offset = strtol(argv[1], &endptr, 0);
-    if (!endptr || *endptr != '\0' || errno == ERANGE) {
-        printf("Invalid offset: %s\n", argv[1]);
-        return;
-    }
-
-    /*
-     * First two arguments are handle and offset. What remains is the value
-     * length
-     */
-    length = argc - 2;
-
-    if (length == 0)
-        goto done;
-
-    if (length > UINT16_MAX) {
-        printf("Write value too long\n");
-        return;
-    }
-
-    value = malloc(length);
-    if (!value) {
-        printf("Failed to allocate memory for value\n");
-        return;
-    }
-
-    for (i = 2; i < argc; i++) {
-        val = strtol(argv[i], &endptr, 0);
-        if (endptr == argv[i] || *endptr != '\0' || errno == ERANGE
-                || val < 0 || val > 255) {
-            printf("Invalid value byte: %s\n", argv[i]);
-            free(value);
-            return;
-        }
-        value[i-2] = val;
-    }
-
-done:
-    cli->reliable_session_id =
-        bt_gatt_client_prepare_write(cli->gatt, id,
-                                     handle, offset,
-                                     value, length,
-                                     write_long_cb, NULL,
-                                     NULL);
-    if (!cli->reliable_session_id)
-        printf("Failed to proceed prepare write\n");
-    else
-        printf("Prepare write success.\n"
-               "Session id: %d to be used on next write\n",
-               cli->reliable_session_id);
-
-    free(value);
-}
-
-static void write_execute_usage(void)
-{
-    printf("Usage: write-execute <session_id> <execute>\n"
-           "e.g.:\n"
-           "\twrite-execute 1 0\n");
-}
-
-static void cmd_write_execute(struct client *cli, char *cmd_str)
-{
-    char *argvbuf[516];
-    char **argv = argvbuf;
-    int argc = 0;
-    char *endptr = NULL;
-    unsigned int session_id;
-    bool execute;
-
-    if (!bt_gatt_client_is_ready(cli->gatt)) {
-        printf("GATT client not initialized\n");
-        return;
-    }
-
-    if (!parse_args(cmd_str, 514, argv, &argc)) {
-        printf("Too many arguments\n");
-        write_value_usage();
-        return;
-    }
-
-    if (argc < 2) {
-        write_execute_usage();
-        return;
-    }
-
-    session_id = strtol(argv[0], &endptr, 0);
-    if (!endptr || *endptr != '\0') {
-        printf("Invalid session id: %s\n", argv[0]);
-        return;
-    }
-
-    if (session_id != cli->reliable_session_id) {
-        printf("Invalid session id: %u != %u\n", session_id,
-               cli->reliable_session_id);
-        return;
-    }
-
-    execute = !!strtol(argv[1], &endptr, 0);
-    if (!endptr || *endptr != '\0') {
-        printf("Invalid execute: %s\n", argv[1]);
-        return;
-    }
-
-    if (execute) {
-        if (!bt_gatt_client_write_execute(cli->gatt, session_id,
-                                          write_cb, NULL, NULL))
-            printf("Failed to proceed write execute\n");
-    } else {
-        bt_gatt_client_cancel(cli->gatt, session_id);
-    }
-
-    cli->reliable_session_id = 0;
-}
-
-static void register_notify_usage(void)
-{
-    printf("Usage: register-notify <chrc value handle>\n");
-}
-
-static void notify_cb(uint16_t value_handle, const uint8_t *value,
-                      uint16_t length, void *user_data)
-{
-    int i;
-
-    printf("\n\tHandle Value Not/Ind: 0x%04x - ", value_handle);
-
-    if (length == 0) {
-        PRLOG("(0 bytes)\n");
-        return;
-    }
-
-    printf("(%u bytes): ", length);
-
-    for (i = 0; i < length; i++)
-        printf("%02x ", value[i]);
-
-    PRLOG("\n");
-}
-
 static void register_notify_cb(uint16_t att_ecode, void *user_data)
 {
     if (att_ecode) {
-        PRLOG("Failed to register notify handler "
-              "- error code: 0x%02x\n", att_ecode);
+        LOG("Failed to register notify handler "
+            "- error code: 0x%02x\n", att_ecode);
         return;
     }
-
-    //PRLOG("Registered notify handler!\n");
 }
-
-static void cmd_register_notify(struct client *cli, char *cmd_str)
-{
-    char *argv[2];
-    int argc = 0;
-    uint16_t value_handle;
-    unsigned int id;
-    char *endptr = NULL;
-
-    if (!bt_gatt_client_is_ready(cli->gatt)) {
-        printf("GATT client not initialized\n");
-        return;
-    }
-
-    if (!parse_args(cmd_str, 1, argv, &argc) || argc != 1) {
-        register_notify_usage();
-        return;
-    }
-
-    value_handle = strtol(argv[0], &endptr, 0);
-    if (!endptr || *endptr != '\0' || !value_handle) {
-        printf("Invalid value handle: %s\n", argv[0]);
-        return;
-    }
-
-    id = bt_gatt_client_register_notify(cli->gatt, value_handle,
-                                        register_notify_cb,
-                                        notify_cb, NULL, NULL);
-    if (!id) {
-        printf("Failed to register notify handler\n");
-        return;
-    }
-
-    printf("Registering notify handler with id: %u\n", id);
-}
-
-static void unregister_notify_usage(void)
-{
-    printf("Usage: unregister-notify <notify id>\n");
-}
-
-static void cmd_unregister_notify(struct client *cli, char *cmd_str)
-{
-    char *argv[2];
-    int argc = 0;
-    unsigned int id;
-    char *endptr = NULL;
-
-    if (!bt_gatt_client_is_ready(cli->gatt)) {
-        printf("GATT client not initialized\n");
-        return;
-    }
-
-    if (!parse_args(cmd_str, 1, argv, &argc) || argc != 1) {
-        unregister_notify_usage();
-        return;
-    }
-
-    id = strtol(argv[0], &endptr, 0);
-    if (!endptr || *endptr != '\0' || !id) {
-        printf("Invalid notify id: %s\n", argv[0]);
-        return;
-    }
-
-    if (!bt_gatt_client_unregister_notify(cli->gatt, id)) {
-        printf("Failed to unregister notify handler with id: %u\n", id);
-        return;
-    }
-
-    printf("Unregistered notify handler with id: %u\n", id);
-}
-
-static void cmd_help(struct client *cli, char *cmd_str);
 
 typedef void (*command_func_t)(struct client *cli, char *cmd_str);
-
-static struct {
-    char *cmd;
-    command_func_t func;
-    char *doc;
-} command[] = {
-    { "help", cmd_help, "\tDisplay help message" },
-    {   "read-value", cmd_read_value,
-        "\tRead a characteristic or descriptor value"
-    },
-    {   "read-long-value", cmd_read_long_value,
-        "\tRead a long characteristic or desctriptor value"
-    },
-    { "read-multiple", cmd_read_multiple, "\tRead Multiple" },
-    {   "write-value", cmd_write_value,
-        "\tWrite a characteristic or descriptor value"
-    },
-    {   "write-long-value", cmd_write_long_value,
-        "Write long characteristic or descriptor value"
-    },
-    {   "write-prepare", cmd_write_prepare,
-        "\tWrite prepare characteristic or descriptor value"
-    },
-    {   "write-execute", cmd_write_execute,
-        "\tExecute already prepared write"
-    },
-    {   "register-notify", cmd_register_notify,
-        "\tSubscribe to not/ind from a characteristic"
-    },
-    {   "unregister-notify", cmd_unregister_notify,
-        "Unregister a not/ind session"
-    },
-    { }
-};
-
-static void cmd_help(struct client *cli, char *cmd_str)
-{
-    int i;
-
-    printf("Commands:\n");
-    for (i = 0; command[i].cmd; i++)
-        printf("\t%-15s\t%s\n", command[i].cmd, command[i].doc);
-}
 
 static void signal_cb(int signum, void *user_data)
 {
@@ -1357,6 +587,7 @@ static void signal_cb(int signum, void *user_data)
         mainloop_quit();
         break;
     default:
+        LOG("signum: %d\n", signum);
         break;
     }
 }
@@ -1610,9 +841,7 @@ static int find_nuimo(bdaddr_t *nuimo_addr) {
 int main(int argc, char *argv[])
 {
     int opt;
-    int sec = BT_SECURITY_LOW;
     uint16_t mtu = 0;
-    uint8_t dst_type = BDADDR_LE_RANDOM;
     bdaddr_t src_addr, dst_addr;
     int dev_id = -1;
     int fd;
@@ -1672,7 +901,7 @@ int main(int argc, char *argv[])
 
     mainloop_init();
 
-    fd = l2cap_le_att_connect(&src_addr, &dst_addr, dst_type, sec);
+    fd = l2cap_le_att_connect(&src_addr, &dst_addr, BDADDR_LE_RANDOM, BT_SECURITY_LOW);
     if (fd < 0)
         return EXIT_FAILURE;
 
