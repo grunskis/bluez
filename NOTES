@@ -1,7 +1,14 @@
-Build on void linux
+# Build on void linux
 ===================
 
-# TODO xbps-install necessary deps
+# TODO document the necessary deps
 
 $ ./bootstrap-configure --with-udevdir=/usr/lib/udev --disable-systemd --enable-library --enable-deprecated --disable-mesh --disable-midi --disable-hid --disable-avrcp --disable-hog --disable-network --disable-btpclient --disable-cups --disable-client --enable-maintainer-mode
 $ make -j4 tools/nuimo-client
+
+## Cross-compilation for Nuimo hub with Yocto SDK
+
+. /usr/local/oecore-x86_64/environment-setup-cortexa7t2hf-neon-oe-linux-gnueabi
+./bootstrap
+./configure --host arm-oe-linux-gnueabi --disable-systemd --enable-static --disable-mesh --disable-btpclient --disable-cups --disable-a2dp --disable-avrcp --disable-network --disable-hid --disable-hog
+make
